@@ -2,10 +2,6 @@ package com.bitchat.android.ui
 
 import android.app.Application
 import android.content.Context
-import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.viewModelScope
@@ -13,7 +9,6 @@ import com.bitchat.android.mesh.BluetoothMeshDelegate
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.DeliveryAck
-import com.bitchat.android.model.DeliveryStatus
 import com.bitchat.android.model.ReadReceipt
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -40,6 +35,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     private val channelManager = ChannelManager(state, messageManager, dataManager, viewModelScope)
     private val privateChatManager = PrivateChatManager(state, messageManager, dataManager)
     private val commandProcessor = CommandProcessor(state, messageManager, channelManager, privateChatManager)
+    
+    // Delegate handler for mesh callbacks
+    private val meshDelegateHandler = MeshDelegateHandler(
+        state = state,
+        messageManager = messageManager,
+        channelManager = channelManager,
+        privateChatManager = privateChatManager,
+        coroutineScope = viewModelScope,
+        onHapticFeedback = { ChatViewModelUtils.triggerHapticFeedback(context) },
+        getMyPeerID = { meshService.myPeerID }
+    )
     
     // Expose state through LiveData (maintaining the same interface)
     val messages: LiveData<List<BitchatMessage>> = state.messages
@@ -235,10 +241,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         privateChatManager.toggleFavorite(peerID)
     }
     
-    override fun isFavorite(peerID: String): Boolean {
-        return privateChatManager.isFavorite(peerID)
-    }
-    
     fun registerPeerPublicKey(peerID: String, publicKeyData: ByteArray) {
         privateChatManager.registerPeerPublicKey(peerID, publicKeyData)
     }
@@ -257,27 +259,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         }
     }
     
-    private fun triggerHapticFeedback() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                val vibrator = vibratorManager.defaultVibrator
-                vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
-            } else {
-                @Suppress("DEPRECATION")
-                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                } else {
-                    @Suppress("DEPRECATION")
-                    vibrator.vibrate(50)
-                }
-            }
-        } catch (e: Exception) {
-            // Silently ignore vibration errors
-        }
-    }
-    
     // MARK: - Command Autocomplete (delegated)
     
     fun updateCommandSuggestions(input: String) {
@@ -288,121 +269,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         return commandProcessor.selectCommandSuggestion(suggestion)
     }
     
-    // MARK: - BluetoothMeshDelegate Implementation
+    // MARK: - BluetoothMeshDelegate Implementation (delegated)
     
     override fun didReceiveMessage(message: BitchatMessage) {
-        viewModelScope.launch {
-            // FIXED: Deduplicate messages from dual connection paths
-            val messageKey = messageManager.generateMessageKey(message)
-            if (messageManager.isMessageProcessed(messageKey)) {
-                return@launch // Duplicate message, ignore
-            }
-            messageManager.markMessageProcessed(messageKey)
-            
-            // Check if sender is blocked
-            message.senderPeerID?.let { senderPeerID ->
-                if (privateChatManager.isPeerBlocked(senderPeerID)) {
-                    return@launch
-                }
-            }
-            
-            // Trigger haptic feedback
-            triggerHapticFeedback()
-
-            if (message.isPrivate) {
-                // Private message
-                privateChatManager.handleIncomingPrivateMessage(message)
-            } else if (message.channel != null) {
-                // Channel message
-                if (state.getJoinedChannelsValue().contains(message.channel)) {
-                    channelManager.addChannelMessage(message.channel, message, message.senderPeerID)
-                }
-            } else {
-                // Public message
-                messageManager.addMessage(message)
-            }
-            
-            // Periodic cleanup
-            if (messageManager.isMessageProcessed("cleanup_check_${System.currentTimeMillis()/30000}")) {
-                messageManager.cleanupDeduplicationCaches()
-            }
-        }
+        meshDelegateHandler.didReceiveMessage(message)
     }
     
     override fun didConnectToPeer(peerID: String) {
-        viewModelScope.launch {
-            // FIXED: Deduplicate connection events from dual connection paths
-            if (messageManager.isDuplicateSystemEvent("connect", peerID)) {
-                return@launch
-            }
-            
-            val systemMessage = BitchatMessage(
-                sender = "system",
-                content = "$peerID connected",
-                timestamp = Date(),
-                isRelay = false
-            )
-            messageManager.addMessage(systemMessage)
-        }
+        meshDelegateHandler.didConnectToPeer(peerID)
     }
     
     override fun didDisconnectFromPeer(peerID: String) {
-        viewModelScope.launch {
-            // FIXED: Deduplicate disconnection events from dual connection paths
-            if (messageManager.isDuplicateSystemEvent("disconnect", peerID)) {
-                return@launch
-            }
-            
-            val systemMessage = BitchatMessage(
-                sender = "system",
-                content = "$peerID disconnected",
-                timestamp = Date(),
-                isRelay = false
-            )
-            messageManager.addMessage(systemMessage)
-        }
+        meshDelegateHandler.didDisconnectFromPeer(peerID)
     }
     
     override fun didUpdatePeerList(peers: List<String>) {
-        viewModelScope.launch {
-            state.setConnectedPeers(peers)
-            state.setIsConnected(peers.isNotEmpty())
-            
-            // Clean up channel members who disconnected
-            channelManager.cleanupDisconnectedMembers(peers, meshService.myPeerID)
-            
-            // Exit private chat if peer disconnected
-            state.getSelectedPrivateChatPeerValue()?.let { currentPeer ->
-                if (!peers.contains(currentPeer)) {
-                    privateChatManager.cleanupDisconnectedPeer(currentPeer)
-                }
-            }
-        }
+        meshDelegateHandler.didUpdatePeerList(peers)
     }
     
     override fun didReceiveChannelLeave(channel: String, fromPeer: String) {
-        viewModelScope.launch {
-            channelManager.removeChannelMember(channel, fromPeer)
-        }
+        meshDelegateHandler.didReceiveChannelLeave(channel, fromPeer)
     }
     
     override fun didReceiveDeliveryAck(ack: DeliveryAck) {
-        viewModelScope.launch {
-            messageManager.updateMessageDeliveryStatus(ack.originalMessageID, DeliveryStatus.Delivered(ack.recipientNickname, ack.timestamp))
-        }
+        meshDelegateHandler.didReceiveDeliveryAck(ack)
     }
     
     override fun didReceiveReadReceipt(receipt: ReadReceipt) {
-        viewModelScope.launch {
-            messageManager.updateMessageDeliveryStatus(receipt.originalMessageID, DeliveryStatus.Read(receipt.readerNickname, receipt.timestamp))
-        }
+        meshDelegateHandler.didReceiveReadReceipt(receipt)
     }
     
     override fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String? {
-        return channelManager.decryptChannelMessage(encryptedContent, channel)
+        return meshDelegateHandler.decryptChannelMessage(encryptedContent, channel)
     }
     
-    override fun getNickname(): String? = state.getNicknameValue()
+    override fun getNickname(): String? {
+        return meshDelegateHandler.getNickname()
+    }
+    
+    override fun isFavorite(peerID: String): Boolean {
+        return meshDelegateHandler.isFavorite(peerID)
+    }
     
     // MARK: - Emergency Clear
     
