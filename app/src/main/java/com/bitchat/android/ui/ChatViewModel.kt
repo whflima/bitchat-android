@@ -21,6 +21,7 @@ import com.bitchat.android.model.ReadReceipt
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
 import java.util.*
+import java.util.Collections
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.spec.GCMParameterSpec
@@ -96,6 +97,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     private val favoritePeers = mutableSetOf<String>()
     private val peerIDToPublicKeyFingerprint = mutableMapOf<String, String>()
     private val blockedUsers = mutableSetOf<String>()
+    
+    // Message deduplication - FIXED: Prevent duplicate messages from dual connection paths
+    private val processedUIMessages = Collections.synchronizedSet(mutableSetOf<String>())
+    private val recentSystemEvents = Collections.synchronizedMap(mutableMapOf<String, Long>())
+    private val MESSAGE_DEDUP_TIMEOUT = 30000L // 30 seconds
+    private val SYSTEM_EVENT_DEDUP_TIMEOUT = 5000L // 5 seconds
     
     // Sidebar state
     private val _showSidebar = MutableLiveData(false)
@@ -987,11 +994,62 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
             // Silently ignore vibration errors (permission or hardware issues)
         }
     }
+    
+    // MARK: - Message Deduplication Utilities
+    
+    /**
+     * Generate a unique key for message deduplication
+     */
+    private fun generateMessageKey(message: BitchatMessage): String {
+        val senderKey = message.senderPeerID ?: message.sender
+        val contentHash = message.content.hashCode()
+        return "$senderKey-${message.timestamp.time}-$contentHash"
+    }
+    
+    /**
+     * Check if a system event is a duplicate within the timeout window
+     */
+    private fun isDuplicateSystemEvent(eventType: String, peerID: String): Boolean {
+        val now = System.currentTimeMillis()
+        val eventKey = "$eventType-$peerID"
+        val lastEvent = recentSystemEvents[eventKey]
+        
+        if (lastEvent != null && (now - lastEvent) < SYSTEM_EVENT_DEDUP_TIMEOUT) {
+            return true // Duplicate event
+        }
+        
+        recentSystemEvents[eventKey] = now
+        return false
+    }
+    
+    /**
+     * Clean up old entries from deduplication caches
+     */
+    private fun cleanupDeduplicationCaches() {
+        val now = System.currentTimeMillis()
+        
+        // Clean up processed UI messages (remove entries older than 30 seconds)
+        if (processedUIMessages.size > 1000) {
+            processedUIMessages.clear()
+        }
+        
+        // Clean up recent system events (remove entries older than timeout)
+        recentSystemEvents.entries.removeAll { (_, timestamp) ->
+            (now - timestamp) > SYSTEM_EVENT_DEDUP_TIMEOUT * 2
+        }
+    }
 
     // MARK: - BluetoothMeshDelegate Implementation
     
     override fun didReceiveMessage(message: BitchatMessage) {
         viewModelScope.launch {
+            // FIXED: Deduplicate messages from dual connection paths
+            val messageKey = generateMessageKey(message)
+            if (processedUIMessages.contains(messageKey)) {
+                return@launch // Duplicate message, ignore
+            }
+            processedUIMessages.add(messageKey)
+            
             // Check if sender is blocked
             message.senderPeerID?.let { senderPeerID ->
                 if (isPeerBlocked(senderPeerID)) {
@@ -1021,11 +1079,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
                 // Public message
                 addMessage(message)
             }
+            
+            // Periodic cleanup
+            if (processedUIMessages.size > 500) {
+                cleanupDeduplicationCaches()
+            }
         }
     }
     
     override fun didConnectToPeer(peerID: String) {
         viewModelScope.launch {
+            // FIXED: Deduplicate connection events from dual connection paths
+            if (isDuplicateSystemEvent("connect", peerID)) {
+                return@launch // Duplicate connection event, ignore
+            }
+            
             val systemMessage = BitchatMessage(
                 sender = "system",
                 content = "$peerID connected",
@@ -1038,6 +1106,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     
     override fun didDisconnectFromPeer(peerID: String) {
         viewModelScope.launch {
+            // FIXED: Deduplicate disconnection events from dual connection paths
+            if (isDuplicateSystemEvent("disconnect", peerID)) {
+                return@launch // Duplicate disconnection event, ignore
+            }
+            
             val systemMessage = BitchatMessage(
                 sender = "system",
                 content = "$peerID disconnected",
