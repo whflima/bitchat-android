@@ -101,8 +101,8 @@ fun MessageInput(
 
 @Composable
 fun CommandSuggestionsBox(
-    suggestions: List<ChatViewModel.CommandSuggestion>,
-    onSuggestionClick: (ChatViewModel.CommandSuggestion) -> Unit,
+    suggestions: List<CommandSuggestion>,
+    onSuggestionClick: (CommandSuggestion) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -113,7 +113,7 @@ fun CommandSuggestionsBox(
             .border(1.dp, colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
             .padding(vertical = 8.dp)
     ) {
-        suggestions.forEach { suggestion ->
+        suggestions.forEach { suggestion: CommandSuggestion ->
             CommandSuggestionItem(
                 suggestion = suggestion,
                 onClick = { onSuggestionClick(suggestion) }
@@ -124,7 +124,7 @@ fun CommandSuggestionsBox(
 
 @Composable
 fun CommandSuggestionItem(
-    suggestion: ChatViewModel.CommandSuggestion,
+    suggestion: CommandSuggestion,
     onClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme

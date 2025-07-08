@@ -112,7 +112,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
             // Input area - stays at bottom
             ChatInputSection(
                 messageText = messageText,
-                onMessageTextChange = { newText ->
+                onMessageTextChange = { newText: String ->
                     messageText = newText
                     viewModel.updateCommandSuggestions(newText)
                 },
@@ -124,7 +124,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 },
                 showCommandSuggestions = showCommandSuggestions,
                 commandSuggestions = commandSuggestions,
-                onSuggestionClick = { suggestion ->
+                onSuggestionClick = { suggestion: CommandSuggestion ->
                     messageText = viewModel.selectCommandSuggestion(suggestion)
                 },
                 selectedPrivatePeer = selectedPrivatePeer,
@@ -199,8 +199,8 @@ private fun ChatInputSection(
     onMessageTextChange: (String) -> Unit,
     onSend: () -> Unit,
     showCommandSuggestions: Boolean,
-    commandSuggestions: List<ChatViewModel.CommandSuggestion>,
-    onSuggestionClick: (ChatViewModel.CommandSuggestion) -> Unit,
+    commandSuggestions: List<CommandSuggestion>,
+    onSuggestionClick: (CommandSuggestion) -> Unit,
     selectedPrivatePeer: String?,
     currentChannel: String?,
     nickname: String,
