@@ -24,7 +24,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bitchat.android.core.ui.utils.singleOrTripleClickable
-import kotlin.random.Random
+import com.bitchat.android.util.NicknameUtils
 
 /**
  * Header components for ChatScreen
@@ -125,7 +125,7 @@ fun NicknameEditor(
                 .onFocusChanged { focusState ->
                     isFocused.value = focusState.isFocused
                     if (!focusState.isFocused && value.isBlank()) {
-                        onValueChange("anon${Random.nextInt(1000, 9999)}")
+                        onValueChange(NicknameUtils.generateRandomNickname())
                     }
                 }
         )
