@@ -11,10 +11,9 @@ import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.DeliveryAck
 import com.bitchat.android.model.ReadReceipt
 import com.bitchat.android.util.NicknameUtils
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import java.util.*
-import kotlin.random.Random
+import kotlinx.coroutines.launch
+import java.util.Date
 
 /**
  * Refactored ChatViewModel - Main coordinator for bitchat functionality
